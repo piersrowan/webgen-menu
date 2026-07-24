@@ -13,15 +13,17 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 const APP_ID: &str = "com.webgen.Menu";
-const PANEL_HEIGHT: i32 = 26; // yambar bar height (bottom) -- sit just above it
 
 // Category buckets, in display order, with icon names that ACTUALLY exist in the shipped Adwaita
 // theme (it has the -symbolic variants; there is no plain "applications-internet", so Internet uses
-// the web-browser glyph).
+// the web-browser glyph). Buckets are kept in step with the wgpkg groups (see docs/wgpkg-groups.md).
 const BUCKETS: &[(&str, &str)] = &[
     ("Internet", "web-browser-symbolic"),
+    ("Graphics", "applications-graphics-symbolic"),
+    ("Documents", "x-office-document-symbolic"),
     ("Utilities", "applications-utilities-symbolic"),
     ("System", "applications-system-symbolic"),
     ("Games", "applications-games-symbolic"),
@@ -56,6 +58,10 @@ fn bucket_for(categories: &str) -> &'static str {
         "Games"
     } else if has("WebBrowser") || has("Network") {
         "Internet"
+    } else if has("Graphics") || has("2DGraphics") || has("RasterGraphics") {
+        "Graphics"
+    } else if has("Office") || has("Viewer") {
+        "Documents"
     } else if has("Settings") {
         "System"
     } else if has("TerminalEmulator") || has("Monitor") {
@@ -268,14 +274,18 @@ fn add_category(
     list.append(&row);
 }
 
-fn build_menu(app: &Application, apps: &[AppEntry]) {
+fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     let win = ApplicationWindow::builder().application(app).build();
     win.init_layer_shell();
     win.set_layer(Layer::Overlay);
-    win.set_keyboard_mode(KeyboardMode::OnDemand);
+    // Exclusive keyboard: the surface grabs focus on present, so Escape works AND `is_active`
+    // actually toggles -- which is what makes close-on-click-away (below) fire (with OnDemand the
+    // surface often never registered active, so the close handler was dead code).
+    win.set_keyboard_mode(KeyboardMode::Exclusive);
     win.set_anchor(Edge::Left, true);
     win.set_anchor(Edge::Bottom, true);
-    win.set_margin(Edge::Bottom, PANEL_HEIGHT);
+    // NO bottom margin: the bottom anchor already sits ABOVE yambar's 26px exclusive zone, so an
+    // extra 26px margin double-counted the bar height and left a gap. Anchor alone = flush on the bar.
 
     let root = GtkBox::new(Orientation::Horizontal, 0);
     root.add_css_class("menu-root");
@@ -364,10 +374,10 @@ fn build_menu(app: &Application, apps: &[AppEntry]) {
         if w.is_active() {
             *activated_once.borrow_mut() = true;
         } else if *activated_once.borrow() {
-            // lost focus after having had it: a flyout popover taking focus does NOT deactivate
-            // the layer surface, so this fires only on a genuine click-away. Close.
-            if pops.borrow().iter().any(|p| p.is_visible()) {
-                return; // a flyout is up; keep the menu
+            // Clicked away after the menu had focus: close it and any open flyout. With the
+            // Exclusive keyboard mode set above, is_active is now reliable so this actually fires.
+            for p in pops.borrow().iter() {
+                p.popdown();
             }
             if let Some(w) = winw.upgrade() {
                 w.close();
@@ -376,17 +386,54 @@ fn build_menu(app: &Application, apps: &[AppEntry]) {
     });
 
     win.present();
+    win
 }
 
 fn main() -> glib::ExitCode {
-    let app = Application::builder()
-        .application_id(APP_ID)
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-        .build();
+    // Single-instance (NOT non-unique): every `webgen-menu` invocation -- the taskbar button and
+    // the desktop left/right click all run it -- lands on the one primary instance and TOGGLES the
+    // menu (open if closed, close if open). No hold() is needed: gio keeps the primary alive across
+    // a remote activation, so the toggle handle + debounce below are valid exactly when a re-invoke
+    // arrives; the primary then quits when the menu closes (non-resident -- leaner).
+    let app = Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| load_css());
-    app.connect_activate(|app| {
-        let apps = load_apps();
-        build_menu(app, &apps);
-    });
+
+    let current: Rc<RefCell<Option<ApplicationWindow>>> = Rc::new(RefCell::new(None));
+    let last_close = Rc::new(RefCell::new(None::<Instant>));
+    {
+        let current = current.clone();
+        let last_close = last_close.clone();
+        app.connect_activate(move |app| {
+            // Toggle OFF: a menu is already open -> close it. (Bind first so the RefCell borrow ends
+            // before close() may synchronously fire the close handler below.)
+            let open = current.borrow_mut().take();
+            if let Some(w) = open {
+                w.close();
+                *last_close.borrow_mut() = Some(Instant::now());
+                return;
+            }
+            // Debounce: the SAME click that defocuses+closes the menu (taskbar button / desktop click)
+            // also re-invokes us; without this we'd immediately reopen. 300ms absorbs that race.
+            if let Some(t) = *last_close.borrow() {
+                if t.elapsed() < Duration::from_millis(300) {
+                    return;
+                }
+            }
+            let apps = load_apps();
+            let win = build_menu(app, &apps);
+            {
+                // Focus-loss / Escape / launching an app closes the window -> clear our handle and
+                // stamp the time so the next invocation toggles cleanly.
+                let current = current.clone();
+                let last_close = last_close.clone();
+                win.connect_close_request(move |_| {
+                    *current.borrow_mut() = None;
+                    *last_close.borrow_mut() = Some(Instant::now());
+                    glib::Propagation::Proceed
+                });
+            }
+            *current.borrow_mut() = Some(win);
+        });
+    }
     app.run()
 }
