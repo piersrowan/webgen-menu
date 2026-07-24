@@ -15,15 +15,30 @@ use std::process::Command;
 use std::rc::Rc;
 
 const APP_ID: &str = "com.webgen.Menu";
-const PANEL_HEIGHT: i32 = 34; // yambar bar height -- sit just above it
+const PANEL_HEIGHT: i32 = 26; // yambar bar height (bottom) -- sit just above it
 
-// Category buckets, in display order, with a freedesktop themed icon name.
+// Category buckets, in display order, with icon names that ACTUALLY exist in the shipped Adwaita
+// theme (it has the -symbolic variants; there is no plain "applications-internet", so Internet uses
+// the web-browser glyph).
 const BUCKETS: &[(&str, &str)] = &[
-    ("Internet", "applications-internet"),
-    ("Utilities", "applications-utilities"),
-    ("System", "applications-system"),
-    ("Games", "applications-games"),
+    ("Internet", "web-browser-symbolic"),
+    ("Utilities", "applications-utilities-symbolic"),
+    ("System", "applications-system-symbolic"),
+    ("Games", "applications-games-symbolic"),
 ];
+
+// Resolve a .desktop Icon= name against the theme, falling back to a generic app glyph so a menu
+// entry never renders blank (some apps ship only hicolor PNGs / no icon at all).
+fn resolve_icon(name: &str) -> String {
+    if !name.is_empty() {
+        if let Some(d) = Display::default() {
+            if gtk::IconTheme::for_display(&d).has_icon(name) {
+                return name.to_string();
+            }
+        }
+    }
+    "application-x-executable-symbolic".to_string()
+}
 
 #[derive(Clone)]
 struct AppEntry {
@@ -164,7 +179,7 @@ fn leaf_row(icon: &str, label: &str, win: &ApplicationWindow, action: Rc<dyn Fn(
     let row = ListBoxRow::new();
     row.set_activatable(true);
     let hb = GtkBox::new(Orientation::Horizontal, 11);
-    let img = Image::from_icon_name(if icon.is_empty() { "application-x-executable" } else { icon });
+    let img = Image::from_icon_name(&resolve_icon(icon));
     img.add_css_class("app-icon");
     let lbl = Label::new(Some(label));
     lbl.set_halign(Align::Start);
@@ -199,7 +214,7 @@ fn add_category(
     let row = ListBoxRow::new();
     row.set_activatable(true);
     let hb = GtkBox::new(Orientation::Horizontal, 11);
-    let img = Image::from_icon_name(icon);
+    let img = Image::from_icon_name(&resolve_icon(icon));
     img.add_css_class("cat-icon");
     let lbl = Label::new(Some(title));
     lbl.set_halign(Align::Start);
