@@ -1,0 +1,24 @@
+[package]
+name = "webgen-menu"
+version = "0.1.0"
+edition = "2021"
+description = "WebGen Linux start menu — a nested, icon+label application launcher (GTK4 + layer-shell)"
+
+[[bin]]
+name = "webgen-menu"
+path = "src/main.rs"
+
+[dependencies]
+# Same gtk4-rs line as the rest of the family (gtk4 0.9 / libadwaita 0.7).
+gtk = { version = "0.9", package = "gtk4", features = ["v4_10"] }
+adw = { version = "0.7", package = "libadwaita", features = ["v1_4"] }
+# Anchors the window to a screen edge, above normal windows, with keyboard focus -- the wlr
+# layer-shell protocol labwc already speaks (yambar/fuzzel use it). Links libgtk4-layer-shell.
+gtk4-layer-shell = "0.5"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
