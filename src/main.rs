@@ -330,6 +330,22 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
         add_category(&list, &popovers, bucket, cat_icon, leaves);
     }
 
+    // Files -- a top-level shortcut to the file manager, above Run..., so it's one click from the
+    // menu root (it ALSO appears under the Utilities bucket -- the duplicate link is by design).
+    // NOTE: the launched file manager is hardcoded to webgen-files for now. We WANT this to become
+    // a user preference (pick which file manager the menu + "Open folder" actions run) -- not built
+    // yet; when it lands, read the chosen command here instead of the literal below.
+    {
+        let files = leaf_row(
+            "system-file-manager",
+            "Files",
+            &win,
+            Rc::new(|| spawn(&["webgen-files".to_string()])),
+        );
+        list.append(&Separator::new(Orientation::Horizontal));
+        list.append(&files);
+    }
+
     // Run... (the old fuzzel search, kept for power users).
     {
         let run = leaf_row(
