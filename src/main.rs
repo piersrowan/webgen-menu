@@ -22,6 +22,7 @@ const APP_ID: &str = "com.webgen.Menu";
 // the web-browser glyph). Buckets are kept in step with the wgpkg groups (see docs/wgpkg-groups.md).
 const BUCKETS: &[(&str, &str)] = &[
     ("Internet", "web-browser-symbolic"),
+    ("Sound & Video", "applications-multimedia-symbolic"),
     ("Graphics", "applications-graphics-symbolic"),
     ("Documents", "x-office-document-symbolic"),
     ("Utilities", "applications-utilities-symbolic"),
@@ -58,6 +59,8 @@ fn bucket_for(categories: &str) -> &'static str {
         "Games"
     } else if has("WebBrowser") || has("Network") {
         "Internet"
+    } else if has("AudioVideo") || has("Audio") || has("Video") || has("Player") {
+        "Sound & Video"
     } else if has("Graphics") || has("2DGraphics") || has("RasterGraphics") {
         "Graphics"
     } else if has("Office") || has("Viewer") {
