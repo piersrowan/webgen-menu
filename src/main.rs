@@ -5,12 +5,13 @@
 // with a fixed priority so ordering is deterministic. See the design mockup approved 2026-07-24.
 use adw::Application;
 use gtk::gdk::Display;
+use gtk::gio;
 use gtk::prelude::*;
-use gtk::{glib, Align, ApplicationWindow, Box as GtkBox, CssProvider, EventControllerKey,
+use gtk::{glib, Align, ApplicationWindow, Box as GtkBox, Button, CssProvider, EventControllerKey,
           EventControllerMotion, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation,
           Popover, PositionType, SelectionMode, Separator};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -142,6 +143,131 @@ fn spawn(argv: &[String]) {
     let _ = Command::new(&argv[0]).args(&argv[1..]).spawn();
 }
 
+// --- confirmation dialog for the destructive Power actions --------------------------------------
+// `webgen-menu --confirm <logout|reboot|poweroff>` shows a centred dialog with an auto-countdown:
+// the action fires when the countdown reaches zero OR the user clicks the confirm button, and is
+// abandoned on Cancel/Escape. Both the panel Power menu (below) and labwc's root menu invoke this,
+// so there is one dialog and one behaviour. A NON_UNIQUE app so it never toggles the main menu.
+fn run_confirm(action: &str) -> glib::ExitCode {
+    let app = Application::builder()
+        .application_id("com.webgen.Menu.Confirm")
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    app.connect_startup(|_| load_css());
+    let action = action.to_string();
+    app.connect_activate(move |app| build_confirm(app, &action));
+    app.run_with_args::<&str>(&[])
+}
+
+fn build_confirm(app: &Application, action: &str) {
+    // (heading, confirm-button label, verb for the countdown line, argv)
+    let (heading, confirm_label, verb, argv): (&str, &str, &str, Vec<String>) = match action {
+        "logout" => ("Log out?", "Log out now", "Logging out", vec![
+            "pkill".into(), "-TERM".into(), "labwc".into()]),
+        "reboot" => ("Restart?", "Restart now", "Restarting", vec![
+            "sh".into(), "-c".into(), "sudo /etc/rc.shutdown reboot".into()]),
+        "poweroff" => ("Power off?", "Power off now", "Powering off", vec![
+            "sh".into(), "-c".into(), "sudo /etc/rc.shutdown poweroff".into()]),
+        _ => { app.quit(); return; }
+    };
+
+    let win = ApplicationWindow::builder().application(app).build();
+    // Centred overlay so it is unmissable and needs no window placement from labwc.
+    win.init_layer_shell();
+    win.set_layer(Layer::Overlay);
+    win.set_keyboard_mode(KeyboardMode::Exclusive);
+    win.add_css_class("confirm");
+
+    let vb = GtkBox::new(Orientation::Vertical, 14);
+    vb.add_css_class("confirm-box");
+    vb.set_margin_top(22); vb.set_margin_bottom(18);
+    vb.set_margin_start(26); vb.set_margin_end(26);
+
+    let h = Label::new(Some(heading));
+    h.add_css_class("confirm-heading");
+    h.set_halign(Align::Start);
+    let body = Label::new(None);
+    body.add_css_class("confirm-body");
+    body.set_halign(Align::Start);
+    body.set_wrap(true);
+
+    let btns = GtkBox::new(Orientation::Horizontal, 10);
+    btns.set_halign(Align::End);
+    btns.set_margin_top(6);
+    let cancel = Button::with_label("Cancel");
+    let confirm = Button::with_label(confirm_label);
+    confirm.add_css_class("destructive-action");
+    btns.append(&cancel);
+    btns.append(&confirm);
+
+    vb.append(&h);
+    vb.append(&body);
+    vb.append(&btns);
+    win.set_child(Some(&vb));
+
+    // Shared finisher: runs at most once (Cancel, confirm, or countdown-hit-zero).
+    let done = Rc::new(Cell::new(false));
+    let finish = {
+        let app = app.clone();
+        let done = done.clone();
+        Rc::new(move |run: bool| {
+            if done.replace(true) {
+                return;
+            }
+            if run {
+                spawn(&argv);
+            }
+            app.quit();
+        })
+    };
+
+    let secs = Rc::new(Cell::new(10i32));
+    body.set_text(&format!("{verb} automatically in {} seconds.", secs.get()));
+    {
+        let body = body.clone();
+        let secs = secs.clone();
+        let finish = finish.clone();
+        let done = done.clone();
+        glib::timeout_add_seconds_local(1, move || {
+            if done.get() {
+                return glib::ControlFlow::Break;
+            }
+            let n = secs.get() - 1;
+            secs.set(n);
+            if n <= 0 {
+                finish(true);
+                return glib::ControlFlow::Break;
+            }
+            body.set_text(&format!("{verb} automatically in {n} seconds."));
+            glib::ControlFlow::Continue
+        });
+    }
+
+    {
+        let finish = finish.clone();
+        cancel.connect_clicked(move |_| finish(false));
+    }
+    {
+        let finish = finish.clone();
+        confirm.connect_clicked(move |_| finish(true));
+    }
+    // Escape cancels.
+    let keys = EventControllerKey::new();
+    {
+        let finish = finish.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+    }
+    win.add_controller(keys);
+
+    win.present();
+}
+
 fn launch_app(app: &AppEntry) {
     let mut argv = exec_argv(&app.exec);
     if app.terminal {
@@ -169,6 +295,11 @@ const CSS: &str = "
 row:hover .chev { color: alpha(@accent_fg_color, 0.85); }
 .flyout contents { padding: 4px; min-width: 210px; }
 .cat-label, .app-label { margin-left: 2px; }
+.confirm { background: transparent; }
+.confirm-box { background: @popover_bg_color; border: 1px solid @borders; border-radius: 14px;
+               min-width: 320px; box-shadow: 0 6px 24px alpha(#000000, 0.35); }
+.confirm-heading { font-weight: 800; font-size: 1.15rem; }
+.confirm-body { color: alpha(@window_fg_color, 0.75); }
 ";
 
 fn load_css() {
@@ -360,20 +491,20 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
 
     // Power submenu -- mirrors the proven commands from labwc's root menu.
     list.append(&Separator::new(Orientation::Horizontal));
+    // Log out / Reboot / Power off go through `webgen-menu --confirm <action>` -- a countdown dialog
+    // that fires on timeout or the confirm button and aborts on Cancel. "Switch to Server" launches
+    // its own guided (interactive) flow, so it needs no extra confirmation.
     let power_leaves = vec![
         leaf_row("system-log-out", "Log out", &win,
-                 Rc::new(|| spawn(&["pkill".into(), "-TERM".into(), "labwc".into()]))),
-        // Switch to Server (headless) -- mirrors labwc's root-menu item. Runs webgen-baseconf's
-        // guided `headless` flow in a terminal (stops the desktop, offers remote screen, tells you
-        // how to reconnect and how to return with `desktop`).
+                 Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "logout".into()]))),
         leaf_row("network-server", "Switch to Server (headless)", &win,
                  Rc::new(|| spawn(&["foot".into(), "--title".into(),
                                     "WebGen: Switch to Server mode".into(),
                                     "--".into(), "headless".into()]))),
         leaf_row("system-reboot", "Reboot", &win,
-                 Rc::new(|| spawn(&["sh".into(), "-c".into(), "sudo /etc/rc.shutdown reboot".into()]))),
+                 Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "reboot".into()]))),
         leaf_row("system-shutdown", "Power off", &win,
-                 Rc::new(|| spawn(&["sh".into(), "-c".into(), "sudo /etc/rc.shutdown poweroff".into()]))),
+                 Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "poweroff".into()]))),
     ];
     add_category(&list, &popovers, "Power", "system-shutdown", power_leaves);
 
@@ -416,6 +547,14 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
 }
 
 fn main() -> glib::ExitCode {
+    // `webgen-menu --confirm <action>`: show the destructive-action confirmation dialog instead of
+    // the start menu (used by this menu's Power items and by labwc's root menu).
+    let raw: Vec<String> = std::env::args().collect();
+    if let Some(pos) = raw.iter().position(|a| a == "--confirm") {
+        let action = raw.get(pos + 1).map(String::as_str).unwrap_or("");
+        return run_confirm(action);
+    }
+
     // Single-instance (NOT non-unique): every `webgen-menu` invocation -- the taskbar button and
     // the desktop left/right click all run it -- lands on the one primary instance and TOGGLES the
     // menu (open if closed, close if open). No hold() is needed: gio keeps the primary alive across
