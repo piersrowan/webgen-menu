@@ -363,6 +363,13 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     let power_leaves = vec![
         leaf_row("system-log-out", "Log out", &win,
                  Rc::new(|| spawn(&["pkill".into(), "-TERM".into(), "labwc".into()]))),
+        // Switch to Server (headless) -- mirrors labwc's root-menu item. Runs webgen-baseconf's
+        // guided `headless` flow in a terminal (stops the desktop, offers remote screen, tells you
+        // how to reconnect and how to return with `desktop`).
+        leaf_row("network-server", "Switch to Server (headless)", &win,
+                 Rc::new(|| spawn(&["foot".into(), "--title".into(),
+                                    "WebGen: Switch to Server mode".into(),
+                                    "--".into(), "headless".into()]))),
         leaf_row("system-reboot", "Reboot", &win,
                  Rc::new(|| spawn(&["sh".into(), "-c".into(), "sudo /etc/rc.shutdown reboot".into()]))),
         leaf_row("system-shutdown", "Power off", &win,
