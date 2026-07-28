@@ -297,7 +297,10 @@ row:hover .chev { color: alpha(@accent_fg_color, 0.85); }
 .cat-label, .app-label { margin-left: 2px; }
 .confirm { background: transparent; }
 .confirm-box { background: @popover_bg_color; border: 1px solid @borders; border-radius: 14px;
-               min-width: 320px; box-shadow: 0 6px 24px alpha(#000000, 0.35); }
+               min-width: 320px; box-shadow: 0 6px 24px alpha(#000000, 0.35);
+               /* inner padding so the text isn't flush to the card edge -- GTK set_margin on the
+                  box sits OUTSIDE this background, so the breathing room has to come from padding. */
+               padding: 26px 32px 22px 32px; }
 .confirm-heading { font-weight: 800; font-size: 1.15rem; }
 .confirm-body { color: alpha(@window_fg_color, 0.75); }
 ";
