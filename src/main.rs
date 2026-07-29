@@ -471,7 +471,7 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     // yet; when it lands, read the chosen command here instead of the literal below.
     {
         let files = leaf_row(
-            "system-file-manager",
+            "com.webgen.Files",
             "Files",
             &win,
             Rc::new(|| spawn(&["webgen-files".to_string()])),
@@ -483,7 +483,7 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     // Run... (the old fuzzel search, kept for power users).
     {
         let run = leaf_row(
-            "system-search",
+            "media-playback-start-symbolic",
             "Run\u{2026}",
             &win,
             Rc::new(|| spawn(&["fuzzel".to_string()])),
@@ -498,18 +498,18 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     // that fires on timeout or the confirm button and aborts on Cancel. "Switch to Server" launches
     // its own guided (interactive) flow, so it needs no extra confirmation.
     let power_leaves = vec![
-        leaf_row("system-log-out", "Log out", &win,
+        leaf_row("system-log-out-symbolic", "Log out", &win,
                  Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "logout".into()]))),
-        leaf_row("network-server", "Switch to Server (headless)", &win,
+        leaf_row("network-server-symbolic", "Switch to Server (headless)", &win,
                  Rc::new(|| spawn(&["foot".into(), "--title".into(),
                                     "WebGen: Switch to Server mode".into(),
                                     "--".into(), "headless".into()]))),
-        leaf_row("system-reboot", "Reboot", &win,
+        leaf_row("system-reboot-symbolic", "Reboot", &win,
                  Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "reboot".into()]))),
-        leaf_row("system-shutdown", "Power off", &win,
+        leaf_row("system-shutdown-symbolic", "Power off", &win,
                  Rc::new(|| spawn(&["webgen-menu".into(), "--confirm".into(), "poweroff".into()]))),
     ];
-    add_category(&list, &popovers, "Power", "system-shutdown", power_leaves);
+    add_category(&list, &popovers, "Power", "system-shutdown-symbolic", power_leaves);
 
     win.set_child(Some(&root));
 
