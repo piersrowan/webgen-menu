@@ -280,6 +280,10 @@ fn launch_app(app: &AppEntry) {
 }
 
 const CSS: &str = "
+/* The full-screen dismiss layer must be invisible: it exists only to catch the click that
+   closes the menu. Without this the whole output would be painted with the window bg. */
+window { background: transparent; }
+.menu-overlay { background: transparent; }
 .menu-root { background: @popover_bg_color; border: 1px solid @borders;
              border-top-right-radius: 12px; }
 .rail { background: linear-gradient(to bottom, @accent_bg_color, shade(@accent_bg_color, 0.72));
@@ -419,8 +423,23 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     // actually toggles -- which is what makes close-on-click-away (below) fire (with OnDemand the
     // surface often never registered active, so the close handler was dead code).
     win.set_keyboard_mode(KeyboardMode::Exclusive);
-    win.set_anchor(Edge::Left, true);
-    win.set_anchor(Edge::Bottom, true);
+    // 🔴 FULL-SCREEN DISMISS LAYER (2026-08-02). Anchoring only Left+Bottom made the surface the
+    // size of the menu, so a click anywhere else went to whatever was underneath. Clicking the
+    // DESKTOP happened to close the menu -- labwc took focus, is_active dropped -- but clicking an
+    // APP WINDOW did not: with Exclusive keyboard the compositor keeps keyboard focus here, so
+    // is_active never changed, the menu stayed open AND the click was delivered to the app.
+    //
+    // Swapping to OnDemand does not fix it either: the menu is opened from the panel button, so the
+    // press lands on yambar and the surface never registers active at all -- which is exactly the
+    // dead-close-handler this comment used to warn about. Both keyboard modes break one case.
+    //
+    // Anchoring all four edges makes the surface cover the output, so EVERY click lands on us. The
+    // background is transparent and click-through is handled below: inside the menu box it works
+    // normally, anywhere else it closes. That is the behaviour asked for -- the click collapses the
+    // menu instead of reaching the app.
+    for e in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+        win.set_anchor(e, true);
+    }
     // NO bottom margin: the bottom anchor already sits ABOVE yambar's 26px exclusive zone, so an
     // extra 26px margin double-counted the bar height and left a gap. Anchor alone = flush on the bar.
 
@@ -511,7 +530,41 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     ];
     add_category(&list, &popovers, "Power", "system-shutdown-symbolic", power_leaves);
 
-    win.set_child(Some(&root));
+    // The menu box sits bottom-left inside the full-screen surface; the rest is transparent and
+    // exists purely to catch the dismiss click.
+    let overlay = GtkBox::new(Orientation::Horizontal, 0);
+    overlay.add_css_class("menu-overlay");
+    overlay.set_valign(gtk::Align::End);
+    overlay.set_halign(gtk::Align::Start);
+    overlay.set_hexpand(true);
+    overlay.set_vexpand(true);
+    overlay.append(&root);
+    win.set_child(Some(&overlay));
+
+    // Close on any press that is NOT inside the menu box. Capture phase, so it is seen before the
+    // rows handle it -- a press on a row still activates normally because we only close when the
+    // pointer is outside `root`'s allocation.
+    let click = gtk::GestureClick::new();
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let winw = win.downgrade();
+    let rootw = root.downgrade();
+    let pops_c = popovers.clone();
+    click.connect_pressed(move |g, _, x, y| {
+        let Some(r) = rootw.upgrade() else { return };
+        let a = r.allocation();
+        let inside = x >= a.x() as f64 && x <= (a.x() + a.width()) as f64
+                  && y >= a.y() as f64 && y <= (a.y() + a.height()) as f64;
+        if !inside {
+            for p in pops_c.borrow().iter() {
+                p.popdown();
+            }
+            if let Some(w) = winw.upgrade() {
+                w.close();
+            }
+            g.set_state(gtk::EventSequenceState::Claimed);
+        }
+    });
+    win.add_controller(click);
 
     // Dismiss: Escape, or focus loss (click anywhere outside -- including the panel button).
     let keys = EventControllerKey::new();
