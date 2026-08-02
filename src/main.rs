@@ -143,6 +143,122 @@ fn spawn(argv: &[String]) {
     let _ = Command::new(&argv[0]).args(&argv[1..]).spawn();
 }
 
+// --- askpass: the GTK password prompt sudo uses --------------------------------------------------
+// Contract (sudo -A / SUDO_ASKPASS): print the password on stdout and exit 0, or exit non-zero to
+// abort. The password is never placed in argv, never logged, and never written anywhere else --
+// stdout goes to sudo through a pipe and nowhere near a terminal or a file.
+fn run_askpass(prompt: &str) -> glib::ExitCode {
+    let app = Application::builder()
+        .application_id("com.webgen.Menu.Askpass")
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    app.connect_startup(|_| load_css());
+    let prompt = prompt.to_string();
+    let ok = Rc::new(RefCell::new(false));
+    let out = Rc::new(RefCell::new(String::new()));
+    {
+        let ok = ok.clone();
+        let out = out.clone();
+        app.connect_activate(move |app| build_askpass(app, &prompt, ok.clone(), out.clone()));
+    }
+    app.run_with_args::<&str>(&[]);
+    if *ok.borrow() {
+        // No trailing newline handling beyond this: sudo strips one newline, and anything we add
+        // beyond the password itself would become part of it.
+        println!("{}", out.borrow());
+        glib::ExitCode::SUCCESS
+    } else {
+        glib::ExitCode::FAILURE
+    }
+}
+
+fn build_askpass(
+    app: &Application,
+    prompt: &str,
+    ok: Rc<RefCell<bool>>,
+    out: Rc<RefCell<String>>,
+) {
+    let win = ApplicationWindow::builder()
+        .application(app)
+        .title("Authentication required")
+        .resizable(false)
+        .modal(true)
+        .build();
+
+    let col = GtkBox::new(Orientation::Vertical, 12);
+    col.set_margin_top(20);
+    col.set_margin_bottom(20);
+    col.set_margin_start(24);
+    col.set_margin_end(24);
+
+    let head = Label::new(Some("Administrator password"));
+    head.add_css_class("title-3");
+    head.set_halign(Align::Start);
+    col.append(&head);
+
+    let why = Label::new(Some(prompt));
+    why.set_halign(Align::Start);
+    why.set_wrap(true);
+    why.set_max_width_chars(46);
+    why.add_css_class("dim-label");
+    col.append(&why);
+
+    let entry = gtk::PasswordEntry::new();
+    entry.set_show_peek_icon(true);
+    entry.set_activates_default(true);
+    col.append(&entry);
+
+    let row = GtkBox::new(Orientation::Horizontal, 8);
+    row.set_halign(Align::End);
+    let cancel = gtk::Button::with_label("Cancel");
+    let auth = gtk::Button::with_label("Authenticate");
+    auth.add_css_class("suggested-action");
+    row.append(&cancel);
+    row.append(&auth);
+    col.append(&row);
+    win.set_child(Some(&col));
+
+    {
+        let w = win.clone();
+        cancel.connect_clicked(move |_| w.close());
+    }
+    {
+        let w = win.clone();
+        let e = entry.clone();
+        let ok = ok.clone();
+        let out = out.clone();
+        auth.connect_clicked(move |_| {
+            *out.borrow_mut() = e.text().to_string();
+            *ok.borrow_mut() = true;
+            w.close();
+        });
+    }
+    {
+        let w = win.clone();
+        let ok = ok.clone();
+        let out = out.clone();
+        entry.connect_activate(move |e| {
+            *out.borrow_mut() = e.text().to_string();
+            *ok.borrow_mut() = true;
+            w.close();
+        });
+    }
+    // Escape aborts -- sudo then reports "no password was provided" and changes nothing.
+    let keys = EventControllerKey::new();
+    let w = win.clone();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Escape {
+            w.close();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    win.add_controller(keys);
+
+    win.present();
+    entry.grab_focus();
+}
+
 // --- confirmation dialog for the destructive Power actions --------------------------------------
 // `webgen-menu --confirm <logout|reboot|poweroff>` shows a centred dialog with an auto-countdown:
 // the action fires when the countdown reaches zero OR the user clicks the confirm button, and is
@@ -621,6 +737,15 @@ fn main() -> glib::ExitCode {
     // `webgen-menu --confirm <action>`: show the destructive-action confirmation dialog instead of
     // the start menu (used by this menu's Power items and by labwc's root menu).
     let raw: Vec<String> = std::env::args().collect();
+    // `webgen-menu --askpass [prompt]`: the SUDO_ASKPASS helper. sudo runs this when it needs a
+    // password and no terminal is available, reads the password from our stdout, and does the
+    // authentication itself. That is the whole design: we supply a prompt, sudo remains the only
+    // thing that verifies anything, and there is no new setuid binary or privileged daemon.
+    if let Some(pos) = raw.iter().position(|a| a == "--askpass") {
+        let prompt = raw.get(pos + 1).cloned()
+            .unwrap_or_else(|| "Administrator password required".to_string());
+        return run_askpass(&prompt);
+    }
     if let Some(pos) = raw.iter().position(|a| a == "--confirm") {
         let action = raw.get(pos + 1).map(String::as_str).unwrap_or("");
         return run_confirm(action);
