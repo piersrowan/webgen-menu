@@ -551,16 +551,31 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     let pops_c = popovers.clone();
     click.connect_pressed(move |g, _, x, y| {
         let Some(r) = rootw.upgrade() else { return };
-        let a = r.allocation();
-        let inside = x >= a.x() as f64 && x <= (a.x() + a.width()) as f64
-                  && y >= a.y() as f64 && y <= (a.y() + a.height()) as f64;
+        let Some(w) = winw.upgrade() else { return };
+        // compute_bounds(&win), NOT allocation(). The gesture is attached to the WINDOW, so x/y are
+        // window coordinates -- but `allocation()` is relative to the widget's PARENT, and this
+        // overlay is halign=Start/valign=End, so it shrinks to the menu's size at the bottom-left
+        // instead of filling the surface. Comparing window coords against parent-relative ones made
+        // every row in the LOWER half of the menu test as "outside": pressing Files, Run... or Power
+        // closed the window on `pressed`, so the row's `released` handler never ran and nothing
+        // launched, while the categories near the top still worked. That is exactly how it was
+        // reported -- "menu Files doesn't work, Utilities > Files does". (2026-08-03)
+        let inside = match r.compute_bounds(&w) {
+            Some(b) => {
+                x >= b.x() as f64
+                    && x <= (b.x() + b.width()) as f64
+                    && y >= b.y() as f64
+                    && y <= (b.y() + b.height()) as f64
+            }
+            // If the bounds cannot be computed, do NOT dismiss. A menu that fails to close is a
+            // nuisance; one that closes when you click an item is broken.
+            None => true,
+        };
         if !inside {
             for p in pops_c.borrow().iter() {
                 p.popdown();
             }
-            if let Some(w) = winw.upgrade() {
-                w.close();
-            }
+            w.close();
             g.set_state(gtk::EventSequenceState::Claimed);
         }
     });
