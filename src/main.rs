@@ -282,10 +282,19 @@ fn build_confirm(app: &Application, action: &str) {
     let (heading, confirm_label, verb, argv): (&str, &str, &str, Vec<String>) = match action {
         "logout" => ("Log out?", "Log out now", "Logging out", vec![
             "pkill".into(), "-TERM".into(), "labwc".into()]),
+        // `sudo -A`, not bare `sudo`. This dialog is a layer-shell surface with NO controlling
+        // terminal, so plain sudo has nowhere to ask for a password: the moment the machine stopped
+        // being NOPASSWD: ALL, choosing Power off did nothing at all, silently, with no error
+        // anywhere the user could see (reported 2026-08-03).
+        //
+        // In normal operation nothing is asked anyway -- /etc/sudoers.d/21-power grants these two
+        // exact commands without a password, because a dirty shutdown is always one long press away
+        // and gating the clean one only produces unclean unmounts. -A is what makes the failure
+        // VISIBLE on a machine that somehow lacks that file: a password dialog instead of silence.
         "reboot" => ("Restart?", "Restart now", "Restarting", vec![
-            "sh".into(), "-c".into(), "sudo /etc/rc.shutdown reboot".into()]),
+            "sh".into(), "-c".into(), "sudo -A /etc/rc.shutdown reboot".into()]),
         "poweroff" => ("Power off?", "Power off now", "Powering off", vec![
-            "sh".into(), "-c".into(), "sudo /etc/rc.shutdown poweroff".into()]),
+            "sh".into(), "-c".into(), "sudo -A /etc/rc.shutdown poweroff".into()]),
         _ => { app.quit(); return; }
     };
 
