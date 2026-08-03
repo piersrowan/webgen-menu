@@ -183,7 +183,9 @@ fn build_askpass(
         .title("Authentication required")
         .resizable(false)
         .modal(true)
+        .default_width(380)
         .build();
+    win.add_css_class("askpass");
 
     let col = GtkBox::new(Orientation::Vertical, 12);
     col.set_margin_top(20);
@@ -398,7 +400,11 @@ fn launch_app(app: &AppEntry) {
 const CSS: &str = "
 /* The full-screen dismiss layer must be invisible: it exists only to catch the click that
    closes the menu. Without this the whole output would be painted with the window bg. */
-window { background: transparent; }
+/* Transparency is for the two windows that are DELIBERATELY see-through: the full-screen menu
+   surface (whose overlay only exists to catch a dismiss click) and the confirm dialog's backdrop.
+   A bare `window` selector applied it to EVERY window in this app, which is why the askpass
+   password dialog rendered transparent with the desktop showing through its text. (2026-08-03) */
+window.menu-window { background: transparent; }
 .menu-overlay { background: transparent; }
 .menu-root { background: @popover_bg_color; border: 1px solid @borders;
              border-top-right-radius: 12px; }
@@ -416,6 +422,10 @@ row:hover .chev { color: alpha(@accent_fg_color, 0.85); }
 .flyout contents { padding: 4px; min-width: 210px; }
 .cat-label, .app-label { margin-left: 2px; }
 .confirm { background: transparent; }
+/* The askpass dialog is an ordinary window: opaque, themed, and it must READ as a system prompt
+   rather than something painted over the page behind it. */
+.askpass { background: @window_bg_color; color: @window_fg_color; }
+.askpass entry, .askpass password { background: @view_bg_color; }
 .confirm-box { background: @popover_bg_color; border: 1px solid @borders; border-radius: 14px;
                min-width: 320px; box-shadow: 0 6px 24px alpha(#000000, 0.35);
                /* inner padding so the text isn't flush to the card edge -- GTK set_margin on the
@@ -649,6 +659,7 @@ fn build_menu(app: &Application, apps: &[AppEntry]) -> ApplicationWindow {
     // The menu box sits bottom-left inside the full-screen surface; the rest is transparent and
     // exists purely to catch the dismiss click.
     let overlay = GtkBox::new(Orientation::Horizontal, 0);
+    win.add_css_class("menu-window");
     overlay.add_css_class("menu-overlay");
     overlay.set_valign(gtk::Align::End);
     overlay.set_halign(gtk::Align::Start);
